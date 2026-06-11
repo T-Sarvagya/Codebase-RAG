@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# docker-compose.yml
+#
+# Spins up the ONE piece of infrastructure this project needs: a PostgreSQL
+# database that has the `pgvector` extension built in. pgvector adds a `vector`
+# column type plus similarity operators (<=> for cosine distance), which is how
+# we store and search the embedding vectors for each code chunk.
+#
+# Why Docker instead of installing Postgres locally? So you don't have to set
+# up Postgres + the pgvector extension by hand — the `pgvector/pgvector` image
+# already has both. `docker compose up -d` and you have a working vector DB.
+# ---------------------------------------------------------------------------
+
+services:
+  db:
+    # Official pgvector image = Postgres 16 with the vector extension preinstalled.
+    image: pgvector/pgvector:pg16
+    container_name: ayc-postgres
+    restart: unless-stopped
+    environment:
+      # These three create the initial database + superuser on first boot.
+      # They MUST match the credentials in DATABASE_URL in your .env file.
+      POSTGRES_USER: ayc
+      POSTGRES_PASSWORD: ayc_password
+      POSTGRES_DB: ask_your_codebase
+    ports:
+      # host:container — exposes Postgres on localhost:5432 so the NestJS
+      # backend (running on your machine, not in Docker) can connect to it.
+      - '5432:5432'
+    volumes:
+      # Named volume so your indexed data survives `docker compose down`.
+      # (Use `docker compose down -v` to wipe it.)
+      - ayc_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Lets you (and any orchestration) know when Postgres is actually ready
+      # to accept connections, not just when the container has started.
+      test: ['CMD-SHELL', 'pg_isready -U ayc -d ask_your_codebase']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ayc_pgdata:

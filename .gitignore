@@ -1,0 +1,29 @@
+# Root .gitignore for the ask-your-codebase monorepo.
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment files (NEVER commit real API keys)
+.env
+**/.env
+!.env.example
+
+# Build output
+dist/
+**/dist/
+build/
+**/build/
+
+# Cloned repositories that the app indexes (can be large, regenerated on demand)
+backend/.repos/
+backend/repos-cache/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
