@@ -88,13 +88,18 @@
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
-  padding: 1.5rem 1.5rem 5rem;
+  padding: 2rem 1.5rem 4rem;
   flex: 1;
+  /* Vertically center the content. Because .shell is min-height:100vh and grows
+     with its content, this centers when there's little (so the page never looks
+     empty) yet top-aligns + scrolls naturally when the answer gets long. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
-/* The first screen (no repo yet) sits a little higher and breathes. */
+/* The first screen (no repo yet) is centered text. */
 .stage-hero {
-  padding-top: clamp(2rem, 9vh, 6rem);
   text-align: center;
 }
 

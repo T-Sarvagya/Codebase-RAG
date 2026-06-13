@@ -50,7 +50,7 @@ ask-your-codebase/
 │       │   ├── db.service.ts     # one shared connection pool + query helpers
 │       │   └── db.module.ts      # makes DbService available app-wide (@Global)
 │       │
-│       ├── embeddings/      # text -> vector (Gemini)
+│       ├── embeddings/      # text -> vector (LOCAL model, transformers.js)
 │       │   ├── embeddings.service.ts
 │       │   └── embeddings.module.ts
 │       │
@@ -114,7 +114,7 @@ These three services are used by both features.
 ### `db/` — the database
 - **`schema.sql`** defines three tables: `repos` (one row per indexed repo, with a
   `status` for progress), `code_chunks` (the important one — each chunk's text +
-  its `embedding vector(768)`), and `query_logs` (history). It also turns on the
+  its `embedding vector(384)`), and `query_logs` (history). It also turns on the
   `pgvector` extension.
 - **`db.service.ts`** opens one connection **pool** at startup, runs `schema.sql`
   (a tiny "migration" — safe to run every boot because everything is
@@ -123,14 +123,16 @@ These three services are used by both features.
 - **`db.module.ts`** is `@Global`, so `DbService` is injectable everywhere without
   re-importing it.
 
-### `embeddings/` — text → vector (Gemini)
-- **`embeddings.service.ts`** calls Gemini's `gemini-embedding-001` model to turn
-  text into 768-number vectors. `embedDocuments()` is used at index time (batched,
-  with retry/backoff on rate limits); `embedQuery()` at search time. It tells
-  Gemini whether the text is a `RETRIEVAL_DOCUMENT` or a `RETRIEVAL_QUERY`, which
-  improves match quality. (We chose Gemini over Voyage because Voyage's free tier
-  throttles to 3 requests/min — Gemini's free tier is far more usable, and reusing
-  the same key keeps the app on one provider.)
+### `embeddings/` — text → vector (LOCAL)
+- **`embeddings.service.ts`** runs a small sentence-transformer
+  (`all-MiniLM-L6-v2`, 384-dim) **locally on the CPU** via transformers.js (ONNX)
+  to turn text into vectors. `embedDocuments()` is used at index time (batched);
+  `embedQuery()` at search time. The model loads lazily (a shared singleton) and
+  the ~25MB download is cached after the first run.
+  - **Why local?** Hosted free embedding tiers (Voyage, Gemini) rate-limit bulk
+    indexing hard — anything bigger than a tiny repo hits `429`. Running the model
+    locally means **no API key, no quota, no rate limit**, so it indexes any repo
+    size reliably. (Generation still uses Gemini — one request per question.)
 
 ### `gemini/` — generation (Gemini)
 - **`gemini.service.ts`** wraps Google's `@google/genai` SDK. `generate()` returns a
@@ -169,8 +171,9 @@ why the UI gets an id instantly and then polls for progress.
 1. **`cloning`** — `simple-git` shallow-clones the repo into `backend/.repos/<id>`.
 2. **`chunking`** — `collectSourceFiles()` walks the repo (skipping `node_modules`,
    `.git`, lockfiles, oversized/binary files), then `chunker` splits each file.
-   Safety caps (`MAX_FILES`, `MAX_CHUNKS`) prevent a giant repo from blowing the
-   embedding free tier — and we **log** when a cap is hit (never silently drop).
+   Safety caps (`MAX_FILES`, `MAX_CHUNKS`) keep a giant repo from making indexing
+   crawl — and we **log** when a cap is hit (never silently drop). NUL bytes are
+   stripped from file contents here (Postgres `TEXT` can't store them).
 3. **`embedding`** — `embeddings.embedDocuments()` turns every chunk into a vector.
 4. **store** — `storeChunks()` bulk-inserts chunks + vectors into `code_chunks`.
 5. **`ready`** — records `chunk_count` and `indexed_at`.
@@ -249,7 +252,7 @@ code viewer can fetch the exact cited code on demand.
 
 1. `AnswerPanel`/`App.tsx` → `api.askQuestion(repoId, "How does login work?")`
 2. → `POST /repos/:id/ask` → `AskController.askQuestion()` → `AskService.ask()`
-3. `EmbeddingsService.embedQuery()` → Gemini → a 768-number vector for the question
+3. `EmbeddingsService.embedQuery()` → local model → a 384-number vector for the question
 4. `DbService.query()` runs the `<=>` similarity search → the 8 closest code chunks
    (e.g. `auth.service.ts`, `login.controller.ts` …)
 5. `AskService` builds the numbered CONTEXT and calls `GeminiService.generate()`

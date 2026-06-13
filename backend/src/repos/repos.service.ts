@@ -123,7 +123,9 @@ export class ReposService {
       const chunks: RawChunk[] = [];
       for (const abs of files) {
         const rel = abs.slice(dir.length + 1); // path relative to repo root
-        const content = await fs.readFile(abs, 'utf8');
+        // Strip NUL bytes (0x00): they're valid UTF-8 but Postgres TEXT columns
+        // reject them, and they only appear in binary-ish files anyway.
+        const content = (await fs.readFile(abs, 'utf8')).split(String.fromCharCode(0)).join('');
         chunks.push(...this.chunker.chunkFile(rel, content));
         if (chunks.length >= this.MAX_CHUNKS) {
           this.logger.warn(

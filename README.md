@@ -16,8 +16,9 @@ It's a **RAG** (Retrieval-Augmented Generation) app built carefully, not a
   are flagged as a possible hallucination.
 - **Live streaming + in-app code viewer** — the answer streams token-by-token,
   and clicking a citation opens the cited code with line numbers.
-- **Runs entirely on free tiers** — one Google Gemini key powers both embeddings
-  and generation; Postgres + pgvector runs locally in Docker.
+- **Runs entirely free, any repo size** — embeddings run **locally** on the CPU
+  (no API, no rate limits); only answer generation calls Gemini (free tier).
+  Postgres + pgvector runs locally in Docker.
 
 > New to the code? Read **[CODEBASE_GUIDE.md](./CODEBASE_GUIDE.md)** — a
 > plain-English, file-by-file walkthrough of how the whole thing works.
@@ -31,12 +32,12 @@ flowchart LR
     subgraph Indexing["Indexing (once per repo)"]
         URL[GitHub URL] --> Clone[clone<br/>simple-git]
         Clone --> Chunk[AST chunker<br/>tree-sitter]
-        Chunk --> EmbedD[embed chunks<br/>Gemini]
+        Chunk --> EmbedD[embed chunks<br/>local model]
         EmbedD --> Store[(pgvector<br/>code_chunks)]
     end
 
     subgraph Answering["Answering (per question)"]
-        Q[Question] --> EmbedQ[embed query<br/>Gemini]
+        Q[Question] --> EmbedQ[embed query<br/>local model]
         EmbedQ --> Search[top-k cosine search]
         Store --> Search
         Search --> Gen[Gemini<br/>grounded + cited]
@@ -52,7 +53,7 @@ flowchart LR
 | **Frontend** | React + TypeScript (Vite) — `frontend/` |
 | **Backend** | NestJS + TypeScript — `backend/` |
 | **Chunking** | tree-sitter (AST-aware: TS / TSX / JS / Python; line-window fallback) |
-| **Embeddings** | Google Gemini `gemini-embedding-001` (768-dim) |
+| **Embeddings** | Local `all-MiniLM-L6-v2` (384-dim) via transformers.js — no API, no limits |
 | **Generation** | Google Gemini `gemini-2.5-flash` via `@google/genai` (streaming) |
 | **Vector store** | Postgres + `pgvector` (cosine distance, Docker) |
 
@@ -89,9 +90,11 @@ animations, and a light/dark toggle.
 - **Docker** (for the Postgres + pgvector container)
 - **One free API key** — **Gemini**, from Google AI Studio:
   https://aistudio.google.com/apikey (the developer API key, **not** the consumer
-  "Gemini Advanced/Pro" app subscription). It powers both embeddings and answers.
+  "Gemini Advanced/Pro" app subscription). It powers **answer generation only**;
+  embeddings run locally, so indexing has no API limits.
   - Note: if a model reports `free tier limit 0` for your key, switch
     `GEMINI_MODEL` (e.g. to `gemini-2.5-flash-lite`) — see `.env.example`.
+  - On the first index, the embedding model (~25MB) downloads once, then caches.
 
 ---
 
@@ -143,9 +146,9 @@ The app is three pieces; each has a free host:
    then run `CREATE EXTENSION vector;` once (the app's `schema.sql` also tries
    this on boot). Copy its connection string.
 2. **Backend — NestJS** on **Render** / **Railway** / **Fly.io** (Node web
-   service). Set env vars `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`,
-   `EMBEDDING_MODEL`, `EMBEDDING_DIM`. Build: `npm install && npm run build`,
-   start: `node dist/main.js`.
+   service). Set env vars `DATABASE_URL`, `GEMINI_API_KEY`, `GEMINI_MODEL`.
+   Build: `npm install && npm run build`, start: `node dist/main.js`. (Give the
+   instance enough memory/disk for the local embedding model, ~25MB + runtime.)
 3. **Frontend — React/Vite** on **Vercel** or **Netlify**. Set `VITE_API_URL`
    to the deployed backend URL (see `frontend/.env.example`). Build: `npm run
    build`, output dir: `dist`.

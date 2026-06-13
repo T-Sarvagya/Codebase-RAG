@@ -40,9 +40,10 @@ CREATE TABLE IF NOT EXISTS code_chunks (
   language     TEXT,                    -- inferred from file extension
   symbol_name  TEXT,                    -- function/class/method name from AST chunking (null for line-window chunks)
   content      TEXT NOT NULL,           -- the actual code text of this chunk
-  -- The embedding. vector(768) MUST match EMBEDDING_DIM in .env
-  -- (Gemini text-embedding-004 = 768). Change both together if you swap models.
-  embedding    vector(768) NOT NULL,
+  -- The embedding. vector(384) matches the local model all-MiniLM-L6-v2.
+  -- If you swap the embedding model, change this size to match and recreate
+  -- the table (see embeddings.service.ts).
+  embedding    vector(384) NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

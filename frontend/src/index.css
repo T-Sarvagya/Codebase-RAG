@@ -44,8 +44,9 @@
 
   --shadow: 0 18px 50px -12px rgba(0, 0, 0, 0.65);
   --shadow-glow: 0 0 0 1px var(--border), 0 10px 40px -10px var(--accent-soft);
-  --grid-line: rgba(255, 255, 255, 0.03);
-  --halo: rgba(244, 183, 64, 0.16);
+  --halo: rgba(244, 183, 64, 0.18);
+  --mesh-2: rgba(94, 234, 212, 0.07); /* soft teal counter-glow */
+  --grain: 0.05;
   --code-bg: #0b0e16;
   color-scheme: dark;
 }
@@ -74,8 +75,9 @@
 
   --shadow: 0 18px 50px -16px rgba(28, 26, 21, 0.22);
   --shadow-glow: 0 0 0 1px var(--border), 0 12px 36px -12px rgba(28, 26, 21, 0.16);
-  --grid-line: rgba(28, 26, 21, 0.045);
-  --halo: rgba(189, 126, 9, 0.14);
+  --halo: rgba(189, 126, 9, 0.16);
+  --mesh-2: rgba(13, 148, 136, 0.06);
+  --grain: 0.035;
   --code-bg: #1a1814;
   color-scheme: light;
 }
@@ -99,40 +101,38 @@ body {
   transition: background-color var(--t) var(--ease), color var(--t) var(--ease);
 }
 
-/* Atmospheric background: a soft gold halo up top + a faint technical grid.
-   Fixed + behind everything, gently drifting for a sense of depth. */
+/* Atmospheric background: a soft "gradient mesh" of warm + cool light blooms,
+   fixed behind everything and slowly drifting for a sense of depth. */
 body::before {
   content: '';
   position: fixed;
-  inset: 0;
+  inset: -10%;
   z-index: -2;
   background:
-    radial-gradient(60rem 40rem at 50% -8rem, var(--halo), transparent 60%),
-    radial-gradient(40rem 30rem at 88% 8%, var(--accent-soft), transparent 55%);
+    radial-gradient(42rem 32rem at 16% -4%, var(--halo), transparent 62%),
+    radial-gradient(38rem 30rem at 92% 10%, var(--accent-soft), transparent 60%),
+    radial-gradient(46rem 38rem at 50% 118%, var(--mesh-2), transparent 62%);
   pointer-events: none;
-  animation: drift 18s var(--ease) infinite alternate;
+  animation: drift 22s var(--ease) infinite alternate;
 }
 
+/* A whisper of film grain on top — premium texture, nothing like a grid. */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
   z-index: -2;
-  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 48px 48px;
-  /* fade the grid out toward the edges so it reads as texture, not a table */
-  -webkit-mask-image: radial-gradient(70% 60% at 50% 30%, #000, transparent 95%);
-  mask-image: radial-gradient(70% 60% at 50% 30%, #000, transparent 95%);
   pointer-events: none;
+  opacity: var(--grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 @keyframes drift {
   from {
-    transform: translateY(0) scale(1);
+    transform: translate(0, 0) scale(1);
   }
   to {
-    transform: translateY(-12px) scale(1.04);
+    transform: translate(-1.5%, -2%) scale(1.05);
   }
 }
 

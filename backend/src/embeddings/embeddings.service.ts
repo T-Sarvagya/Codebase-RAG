@@ -1,57 +1,72 @@
 /**
  * embeddings.service.ts
  *
- * Turns text into embedding vectors using Google's Gemini embedding model
- * (`text-embedding-004`, 768 numbers per vector). An "embedding" captures the
- * *meaning* of text as a point in vector space, so semantically similar code
- * ends up close together — which is what powers the similarity search.
+ * Turns text into embedding vectors — entirely LOCALLY, using a small
+ * sentence-transformer (`all-MiniLM-L6-v2`, 384 dims) run via transformers.js
+ * (ONNX runtime). An "embedding" captures the *meaning* of text as a point in
+ * vector space, so semantically similar code ends up close together — which is
+ * what powers the similarity search.
  *
- * WHY GEMINI (and not Voyage)? Voyage's free tier throttles to 3 requests/min
- * and 10K tokens/min, which makes indexing a real repo impractical (you hit
- * HTTP 429 almost immediately). Gemini's free embedding tier is far more
- * generous, it reuses the GEMINI_API_KEY we already have for answering, and it
- * keeps the whole app on a single provider. (voyage-code-3 is marginally better
- * for code, but "works for free" wins here.)
+ * WHY LOCAL (and not a hosted embedding API)? Hosted free tiers (Voyage,
+ * Gemini) rate-limit bulk embedding hard — indexing anything bigger than a tiny
+ * repo hits `429 / RESOURCE_EXHAUSTED`. Running the model on the CPU has **no
+ * API key, no quota, and no rate limit**, so it indexes repos of any size
+ * reliably. The model (~25 MB) downloads once on first use and is then cached;
+ * after that, embedding is ~tens of milliseconds per chunk. (Generation still
+ * uses Gemini — that's one request per question, which the free tier handles.)
  *
- * Two entry points, because retrieval is better when we tell Gemini whether the
- * text is a stored document or a search query (its `taskType` hint):
- *   - embedDocuments(): code chunks we store     (taskType RETRIEVAL_DOCUMENT)
- *   - embedQuery():     the user's question       (taskType RETRIEVAL_QUERY)
+ * Two entry points kept identical to before, so nothing else changed:
+ *   - embedDocuments(): code chunks we store
+ *   - embedQuery():     the user's question at search time
  */
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { GoogleGenAI } from '@google/genai';
+import { pipeline } from '@huggingface/transformers';
+
+// The pipeline is an async-callable object; we only use it loosely typed.
+type Extractor = (
+  input: string | string[],
+  opts: { pooling: 'mean'; normalize: boolean },
+) => Promise<{ tolist(): number[][] }>;
 
 @Injectable()
 export class EmbeddingsService {
   private readonly logger = new Logger(EmbeddingsService.name);
-  private readonly client: GoogleGenAI;
-  private readonly model: string;
-  private readonly dim: number;
 
-  // How many chunks to embed per API call. Gemini accepts up to 100 per request.
-  private readonly BATCH_SIZE = 100;
-  // Retry settings for transient rate-limit (429) / server errors.
-  private readonly MAX_RETRIES = 5;
+  // ONNX sentence-transformer. 384-dim output — must match vector(384) in schema.sql.
+  private readonly MODEL = 'Xenova/all-MiniLM-L6-v2';
+  private readonly BATCH_SIZE = 32;
 
-  constructor(private readonly config: ConfigService) {
-    // Embeddings and generation share one Gemini key.
-    const apiKey = this.config.getOrThrow<string>('GEMINI_API_KEY');
-    this.model = this.config.get<string>('EMBEDDING_MODEL', 'gemini-embedding-001');
-    // Must match the vector(N) size in schema.sql (text-embedding-004 = 768).
-    this.dim = Number(this.config.get<string>('EMBEDDING_DIM', '768'));
-    this.client = new GoogleGenAI({ apiKey });
+  // Load the model once, lazily, and share the single instance. The first call
+  // downloads + initialises the model (slow, one-time); later calls reuse it.
+  private extractorPromise: Promise<Extractor> | null = null;
+
+  private getExtractor(): Promise<Extractor> {
+    if (!this.extractorPromise) {
+      this.logger.log(
+        `Loading local embedding model "${this.MODEL}" (first run downloads ~25MB)…`,
+      );
+      // pipeline() returns the callable feature-extraction model.
+      this.extractorPromise = pipeline(
+        'feature-extraction',
+        this.MODEL,
+      ) as unknown as Promise<Extractor>;
+    }
+    return this.extractorPromise;
   }
 
-  /** Embed many code chunks. Returns one vector per input, in the same order. */
+  /** Embed many code chunks. Returns one 384-dim vector per input, in order. */
   async embedDocuments(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
+    const extractor = await this.getExtractor();
 
     const all: number[][] = [];
+    // Embed in modest batches to bound memory on large repos.
     for (let i = 0; i < texts.length; i += this.BATCH_SIZE) {
       const batch = texts.slice(i, i + this.BATCH_SIZE);
-      const vectors = await this.callGemini(batch, 'RETRIEVAL_DOCUMENT');
-      all.push(...vectors);
+      // mean pooling + L2 normalize = standard sentence-embedding recipe; the
+      // normalized vectors work directly with pgvector's cosine distance.
+      const out = await extractor(batch, { pooling: 'mean', normalize: true });
+      all.push(...out.tolist());
       this.logger.log(
         `Embedded ${Math.min(i + this.BATCH_SIZE, texts.length)}/${texts.length} chunks`,
       );
@@ -59,55 +74,10 @@ export class EmbeddingsService {
     return all;
   }
 
-  /** Embed a single search query. Returns one vector. */
+  /** Embed a single search query. Returns one 384-dim vector. */
   async embedQuery(text: string): Promise<number[]> {
-    const [vector] = await this.callGemini([text], 'RETRIEVAL_QUERY');
-    return vector;
-  }
-
-  /**
-   * The actual API call, with retry + exponential backoff. If Gemini returns a
-   * rate-limit (429 / RESOURCE_EXHAUSTED) or transient server error, we wait a
-   * bit and try again instead of failing the whole indexing job.
-   */
-  private async callGemini(
-    input: string[],
-    taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY',
-  ): Promise<number[][]> {
-    for (let attempt = 0; attempt <= this.MAX_RETRIES; attempt++) {
-      try {
-        const res = await this.client.models.embedContent({
-          model: this.model,
-          contents: input,
-          // taskType tunes the vector for retrieval; outputDimensionality keeps
-          // the size consistent with our pgvector column.
-          config: { taskType, outputDimensionality: this.dim },
-        });
-
-        const embeddings = res.embeddings ?? [];
-        if (embeddings.length !== input.length) {
-          throw new Error(
-            `Gemini returned ${embeddings.length} embeddings for ${input.length} inputs`,
-          );
-        }
-        // Each embedding is { values: number[] }; map to plain number arrays.
-        return embeddings.map((e) => e.values ?? []);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const retryable = /429|RESOURCE_EXHAUSTED|50\d|UNAVAILABLE/i.test(message);
-
-        // Give up if it's not retryable, or we've exhausted our attempts.
-        if (!retryable || attempt === this.MAX_RETRIES) throw err;
-
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s.
-        const delayMs = 1000 * 2 ** attempt;
-        this.logger.warn(
-          `Embedding call hit a limit (attempt ${attempt + 1}); retrying in ${delayMs}ms…`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    // Unreachable, but satisfies TypeScript's control-flow analysis.
-    throw new Error('Embedding failed after retries');
+    const extractor = await this.getExtractor();
+    const out = await extractor([text], { pooling: 'mean', normalize: true });
+    return out.tolist()[0];
   }
 }
