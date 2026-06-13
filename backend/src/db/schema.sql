@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS code_chunks (
   start_line   INTEGER NOT NULL,        -- 1-based first line of this chunk
   end_line     INTEGER NOT NULL,        -- 1-based last line (inclusive)
   language     TEXT,                    -- inferred from file extension
-  symbol_name  TEXT,                    -- function/class name (filled in once AST chunking lands)
+  symbol_name  TEXT,                    -- function/class/method name from AST chunking (null for line-window chunks)
   content      TEXT NOT NULL,           -- the actual code text of this chunk
   -- The embedding. vector(768) MUST match EMBEDDING_DIM in .env
   -- (Gemini text-embedding-004 = 768). Change both together if you swap models.

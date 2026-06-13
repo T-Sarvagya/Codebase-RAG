@@ -134,12 +134,22 @@ These three services are used by both features.
   full answer; `generateStream()` is ready for the future streaming milestone.
   Keeping all Gemini calls here means swapping the model/provider touches one file.
 
-### `chunker/` — splitting files
+### `chunker/` — splitting files (AST-aware)
 - **`chunker.service.ts`** turns a file's text into `RawChunk`s (text + start/end
-  line + language). Right now it uses a **sliding line-window** (60 lines, 10
-  overlapping) — simple but it can split a function in half. Milestone 4 replaces
-  the *inside* of this service with tree-sitter AST chunking; the `RawChunk` shape
-  and method name stay the same, so nothing else changes.
+  line + language + **symbol name**). It parses each file with **tree-sitter** and
+  chunks on real syntax boundaries:
+  - one chunk per top-level **function** and arrow-const (`const x = () => …`);
+  - for a **class**: a "header" chunk (signature + fields) plus one chunk per
+    **method**, named `ClassName.methodName`;
+  - significant **callbacks** passed to calls (Express `router.get('/x', …)`,
+    `.map`, event listeners) named after their call;
+  - leftover lines (imports, top-level code) are captured by a line-window
+    "gap fill" so nothing is ever dropped.
+  Supported grammars: TS / TSX / JS / Python. Anything else (JSON, Markdown, CSS,
+  or a file that fails to parse) **gracefully falls back** to plain line-window
+  chunking. Oversized chunks are sub-split to keep embeddings focused. The public
+  `chunkFile()` signature is unchanged from the original naive version, so the
+  rest of the app didn't need to change — it just gets better chunks now.
 
 ---
 

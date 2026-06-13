@@ -28,6 +28,7 @@ React (Vite) ◀──── JSON answer + citations ◀──── NestJS ◀�
 - **Backend:** NestJS + TypeScript — `backend/`
 - **Embeddings:** Google Gemini `gemini-embedding-001` (768-dim)
 - **Generation:** Google Gemini `gemini-2.5-flash` via `@google/genai`
+- **Chunking:** tree-sitter (AST-aware, function/class/method boundaries)
 - **Vector store:** Postgres + `pgvector` (runs in Docker)
 
 > One Gemini key powers **both** embeddings and generation — no second provider,
@@ -90,9 +91,13 @@ Built in milestones (see `.claude/plans` for the full plan):
 - ✅ **M1 — Scaffold + infra:** monorepo, Docker pgvector, NestJS + Vite apps.
 - ✅ **M2 — Ingest:** clone → walk → chunk → embed → store in pgvector.
 - ✅ **M3 — Grounded answering:** top-k retrieval → Gemini → cited answer; React UI.
-- ⏳ **M4 — AST-aware chunking** (tree-sitter, function/class boundaries).
+- ✅ **M4 — AST-aware chunking:** tree-sitter splits on function/class/method
+  boundaries (TS/TSX/JS/Python), names each chunk (`Class.method`, `router.get`),
+  and gracefully falls back to line-windows for other languages.
 - ⏳ **M5 — Token streaming** (SSE) + in-app code viewer for citations.
 - ⏳ **M6 — Polish, deploy notes, screenshots.**
 
-> The current chunker is a simple line-window splitter (see `chunker.service.ts`);
-> milestone 4 swaps it for AST-aware chunking without changing anything downstream.
+> The chunker (`chunker.service.ts`) parses each file with tree-sitter and chunks
+> on real syntax boundaries instead of blind line windows — so a chunk is a whole
+> function/method, which embeds into a much cleaner vector. Unsupported file types
+> automatically fall back to line-window chunking.
