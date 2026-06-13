@@ -60,18 +60,26 @@ flowchart LR
 
 ## Screenshots
 
-<!--
-  Add screenshots here once you've run it:
-  1. Take a shot of (a) the streaming answer with citations, and (b) the code
-     viewer open on a citation.
-  2. Drag the images into this section on GitHub (or drop them in a docs/ folder)
-     and reference them like:
-        ![Streaming answer](docs/answer.png)
-        ![Code viewer](docs/viewer.png)
--->
+A "Code Observatory" interface — ink + gold, distinctive type (Sora +
+JetBrains Mono), an atmospheric grid/halo background, orchestrated entrance
+animations, and a light/dark toggle.
 
-_Run it locally (below) and drop in a couple of screenshots — the streaming
-answer with citations, and the code viewer open on one._
+![Ask Your Codebase — hero](docs/hero.png)
+
+**Streaming answer with clickable citations:**
+
+![Streaming answer with citations](docs/answer.png)
+
+**In-app code viewer (opens on a citation):**
+
+![Code viewer](docs/viewer.png)
+
+<details>
+<summary>Light theme</summary>
+
+![Light theme](docs/hero-light.png)
+
+</details>
 
 ---
 

@@ -1,15 +1,16 @@
 /**
  * App.tsx  —  the top-level component that orchestrates the whole UI flow:
  *
- *   1. Show RepoForm.  User submits a GitHub URL -> POST /repos.
+ *   1. Hero screen: a centered headline + the "paste a GitHub URL" form.
  *   2. While the repo's status isn't "ready"/"error", poll GET /repos/:id every
- *      couple of seconds and show progress (cloning -> chunking -> embedding).
- *   3. When ready, show a question box.  Submit -> STREAM the answer live.
- *   4. Render the streaming answer + clickable citations; clicking a citation
- *      opens the in-app CodeViewer with the exact cited code.
+ *      couple of seconds and show animated progress.
+ *   3. When ready, show the question box. Submit -> STREAM the answer live.
+ *   4. Render the streaming answer + citations; clicking a citation opens the
+ *      in-app CodeViewer with the exact cited code.
  *
- * State here is deliberately simple (a handful of useState hooks) so the data
- * flow is easy to follow. A bigger app might use a state library or React Query.
+ * Also owns the light/dark THEME (persisted to localStorage, applied as a
+ * data-theme attribute on <html>). State is intentionally simple useState/hooks
+ * so the data flow stays easy to follow.
  */
 import { useEffect, useState, FormEvent } from 'react';
 import './App.css';
@@ -17,49 +18,67 @@ import { Repo, Citation, createRepo, getRepo, askStream } from './api';
 import { RepoForm } from './components/RepoForm';
 import { AnswerPanel } from './components/AnswerPanel';
 import { CodeViewer } from './components/CodeViewer';
+import { ThemeToggle } from './components/ThemeToggle';
+
+type Theme = 'light' | 'dark';
 
 // Human-readable label for each indexing status.
 const STATUS_LABEL: Record<Repo['status'], string> = {
-  pending: 'Queued…',
-  cloning: 'Cloning repository…',
-  chunking: 'Splitting files into chunks…',
-  embedding: 'Generating embeddings…',
+  pending: 'Queued',
+  cloning: 'Cloning repository',
+  chunking: 'Splitting into chunks',
+  embedding: 'Generating embeddings',
   ready: 'Ready',
   error: 'Failed',
 };
 
+// Maps a status to a badge style variant.
+function badgeVariant(status: Repo['status']): string {
+  if (status === 'ready') return 'is-ready';
+  if (status === 'error') return 'is-error';
+  return 'is-working';
+}
+
 function App() {
-  // The repo we're working with (null until the user indexes one).
+  // ---- Theme ----
+  const [theme, setTheme] = useState<Theme>(() =>
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+  );
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('ayc-theme', theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme]);
+
+  // ---- App state ----
   const [repo, setRepo] = useState<Repo | null>(null);
-  // Top-level error banner (network errors, validation errors, etc.).
   const [error, setError] = useState<string | null>(null);
 
-  // Question-answering state.
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false); // a stream is in progress
   const [answer, setAnswer] = useState(''); // accumulates as tokens arrive
   const [citations, setCitations] = useState<Citation[]>([]);
   const [grounded, setGrounded] = useState<boolean | null>(null);
-  const [hasAsked, setHasAsked] = useState(false); // show the panel once we've asked
+  const [hasAsked, setHasAsked] = useState(false);
 
-  // Which chunk (if any) is open in the code viewer modal.
   const [viewerChunkId, setViewerChunkId] = useState<string | null>(null);
 
-  // ---- Step 1: start indexing a repo -------------------------------------
+  // ---- Step 1: start indexing a repo ----
   async function handleIndex(url: string) {
     setError(null);
     resetAnswer();
     try {
       const created = await createRepo(url); // returns a "pending" repo
-      setRepo(created); // this triggers the polling effect below
+      setRepo(created); // triggers the polling effect below
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start indexing');
     }
   }
 
-  // ---- Step 2: poll status until ready/error -----------------------------
-  // This effect re-runs whenever `repo` changes. While the repo is still being
-  // indexed, it schedules a poll 2s later; once ready/error it stops.
+  // ---- Step 2: poll status until ready/error ----
   useEffect(() => {
     if (!repo) return;
     if (repo.status === 'ready' || repo.status === 'error') return;
@@ -73,11 +92,10 @@ function App() {
       }
     }, 2000);
 
-    // Cleanup: cancel the pending timer if the component re-renders/unmounts.
     return () => clearTimeout(timer);
   }, [repo]);
 
-  // ---- Step 3/4: ask a question (STREAMING) ------------------------------
+  // ---- Step 3/4: ask a question (STREAMING) ----
   async function handleAsk(e: FormEvent) {
     e.preventDefault();
     if (!repo || question.trim().length < 3) return;
@@ -89,11 +107,8 @@ function App() {
     setCitations([]);
     setGrounded(null);
 
-    // askStream dispatches each SSE frame to one of these callbacks.
     await askStream(repo.id, question.trim(), {
-      // We don't render the raw "sources" list here, but it arrives first and
-      // could be used to show "searching N snippets". (Citations come at the end.)
-      onToken: (text) => setAnswer((prev) => prev + text), // append live
+      onToken: (text) => setAnswer((prev) => prev + text),
       onDone: (d) => {
         setCitations(d.citations);
         setGrounded(d.grounded);
@@ -113,7 +128,6 @@ function App() {
     setHasAsked(false);
   }
 
-  // Lets the user start over with a different repo.
   function reset() {
     setRepo(null);
     setQuestion('');
@@ -122,83 +136,121 @@ function App() {
     resetAnswer();
   }
 
-  const isIndexing =
-    repo != null && repo.status !== 'ready' && repo.status !== 'error';
+  const isIndexing = repo != null && repo.status !== 'ready' && repo.status !== 'error';
 
   return (
-    <div className="container">
-      <header>
-        <h1>Ask&nbsp;Your&nbsp;Codebase</h1>
-        <p className="subtitle">
-          Index any public GitHub repo, then ask questions and get answers with
-          file&nbsp;+&nbsp;line citations.
-        </p>
+    <div className="shell">
+      {/* Persistent top bar: brand + theme toggle. */}
+      <header className="topbar reveal">
+        <div className="brand">
+          <BrandMark />
+          <div>
+            <div className="brand-name">Ask Your Codebase</div>
+            <div className="brand-kicker">code intelligence</div>
+          </div>
+        </div>
+        <ThemeToggle theme={theme} onToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
       </header>
 
-      {/* Repo input — shown until a repo is being/has been indexed. */}
-      {!repo && <RepoForm onSubmit={handleIndex} busy={false} />}
+      <main className={`container ${!repo ? 'stage-hero' : ''}`}>
+        {/* ---- HERO (no repo yet) ---- */}
+        {!repo && (
+          <>
+            <div className="hero-head reveal d-1">
+              <div className="eyebrow">retrieval-augmented · cited answers</div>
+              <h1>
+                Ask your <span className="accent">codebase</span>.
+              </h1>
+              <p className="subtitle">
+                Index any public GitHub repo, then ask questions and get answers with
+                exact file&nbsp;+&nbsp;line citations — streamed in live.
+              </p>
+            </div>
+            <div className="reveal d-2">
+              <RepoForm onSubmit={handleIndex} busy={false} />
+            </div>
+          </>
+        )}
 
-      {/* Indexing progress. */}
-      {repo && (
-        <section className="repo-status">
-          <div>
-            <strong>{repo.url}</strong>
-            <span className={`badge status-${repo.status}`}>
-              {STATUS_LABEL[repo.status]}
-              {repo.status === 'ready' && ` · ${repo.chunk_count} chunks`}
-            </span>
-          </div>
-          <button className="link-button" onClick={reset}>
-            Use a different repo
-          </button>
-          {repo.status === 'error' && (
-            <p className="warning">Indexing failed: {repo.error}</p>
-          )}
-        </section>
-      )}
+        {/* ---- WORKING (repo chosen) ---- */}
+        {repo && (
+          <>
+            <section className="repo-status panel reveal">
+              <div className="status-row">
+                <span className="repo-url">{repo.url}</span>
+                <span className={`badge ${badgeVariant(repo.status)}`}>
+                  <span className="dot" />
+                  {STATUS_LABEL[repo.status]}
+                  {repo.status === 'ready' && ` · ${repo.chunk_count} chunks`}
+                </span>
+              </div>
+              <button className="link-button" onClick={reset}>
+                ← Use a different repo
+              </button>
+              {repo.status === 'error' && (
+                <p className="warning">Indexing failed: {repo.error}</p>
+              )}
+            </section>
 
-      {/* Question box — only once indexing is finished. */}
-      {repo?.status === 'ready' && (
-        <form className="ask-form" onSubmit={handleAsk}>
-          <textarea
-            placeholder="e.g. How does authentication work in this codebase?"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            rows={3}
-            disabled={asking}
-          />
-          <button type="submit" disabled={asking || question.trim().length < 3}>
-            {asking ? 'Thinking…' : 'Ask'}
-          </button>
-        </form>
-      )}
+            {repo.status === 'ready' && (
+              <form className="ask-form reveal d-1" onSubmit={handleAsk}>
+                <textarea
+                  placeholder="e.g. How does authentication work in this codebase?"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  rows={3}
+                  disabled={asking}
+                />
+                <div className="ask-row">
+                  <button type="submit" className="btn" disabled={asking || question.trim().length < 3}>
+                    {asking ? 'Thinking…' : 'Ask →'}
+                  </button>
+                </div>
+              </form>
+            )}
 
-      {isIndexing && (
-        <p className="hint">Indexing can take a little while for big repos…</p>
-      )}
+            {isIndexing && (
+              <p className="hint">› indexing — this can take a little while for big repos…</p>
+            )}
 
-      {error && <p className="warning">{error}</p>}
+            {error && <p className="warning">{error}</p>}
 
-      {/* The streaming answer + citations. */}
-      {hasAsked && (
-        <AnswerPanel
-          answer={answer}
-          citations={citations}
-          grounded={grounded}
-          streaming={asking}
-          onOpenChunk={setViewerChunkId}
-        />
-      )}
+            {hasAsked && (
+              <AnswerPanel
+                answer={answer}
+                citations={citations}
+                grounded={grounded}
+                streaming={asking}
+                onOpenChunk={setViewerChunkId}
+              />
+            )}
+          </>
+        )}
+      </main>
 
-      {/* The code viewer modal, when a citation is open. */}
       {viewerChunkId && repo && (
-        <CodeViewer
-          chunkId={viewerChunkId}
-          repo={repo}
-          onClose={() => setViewerChunkId(null)}
-        />
+        <CodeViewer chunkId={viewerChunkId} repo={repo} onClose={() => setViewerChunkId(null)} />
       )}
     </div>
+  );
+}
+
+/** The brand mark — a "scan the code" lens, drawn with currentColor (gold). */
+function BrandMark() {
+  return (
+    <svg
+      className="brand-mark"
+      viewBox="0 0 32 32"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+    >
+      <circle cx="14" cy="14" r="7.5" />
+      <line x1="20" y1="20" x2="26" y2="26" />
+      <line x1="11" y1="12.5" x2="17.5" y2="12.5" />
+      <line x1="11" y1="16" x2="15.5" y2="16" />
+    </svg>
   );
 }
 

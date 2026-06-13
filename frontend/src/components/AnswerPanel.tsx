@@ -21,7 +21,7 @@ interface Props {
 
 export function AnswerPanel({ answer, citations, grounded, streaming, onOpenChunk }: Props) {
   return (
-    <div className="answer-panel">
+    <div className="answer-panel panel">
       <h3>Answer</h3>
       <p className="answer-text">
         {answer}

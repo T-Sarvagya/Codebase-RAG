@@ -32,8 +32,8 @@ export function RepoForm({ onSubmit, busy }: Props) {
         onChange={(e) => setUrl(e.target.value)}
         disabled={busy}
       />
-      <button type="submit" disabled={busy || url.trim().length === 0}>
-        {busy ? 'Indexing…' : 'Index repo'}
+      <button className="btn" type="submit" disabled={busy || url.trim().length === 0}>
+        {busy ? 'Indexing…' : 'Index →'}
       </button>
     </form>
   );

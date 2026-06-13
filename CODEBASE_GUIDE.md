@@ -83,7 +83,8 @@ ask-your-codebase/
         └── components/
             ├── RepoForm.tsx           # the "paste a GitHub URL" input
             ├── AnswerPanel.tsx        # renders the streaming answer + citations
-            └── CodeViewer.tsx         # modal showing the cited code (line numbers)
+            ├── CodeViewer.tsx         # modal showing the cited code (line numbers)
+            └── ThemeToggle.tsx        # light/dark switch (persisted to localStorage)
 ```
 
 ---
