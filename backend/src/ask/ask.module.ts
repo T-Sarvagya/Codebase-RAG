@@ -6,13 +6,15 @@
  */
 import { Module } from '@nestjs/common';
 import { AskController } from './ask.controller';
+import { ChunksController } from './chunks.controller';
 import { AskService } from './ask.service';
 import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { GeminiModule } from '../gemini/gemini.module';
 
 @Module({
   imports: [EmbeddingsModule, GeminiModule],
-  controllers: [AskController],
+  // ChunksController serves GET /chunks/:id for the in-app code viewer.
+  controllers: [AskController, ChunksController],
   providers: [AskService],
 })
 export class AskModule {}

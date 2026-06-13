@@ -159,7 +159,98 @@ button:not(:disabled):hover {
   padding: 0.3rem 0.55rem;
   color: #334155;
 }
+.citation-chip {
+  cursor: pointer;
+}
 .citation-chip:hover {
   border-color: #2563eb;
+  background: #e6eefc;
   text-decoration: none;
+}
+
+/* Blinking cursor shown while the answer is still streaming. */
+.cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: #2563eb;
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* ---- Code viewer modal ---- */
+.viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 50;
+}
+.viewer-dialog {
+  background: #fff;
+  border-radius: 12px;
+  width: min(820px, 100%);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.3);
+}
+.viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #e6e9ef;
+}
+.viewer-title {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1c2230;
+}
+.viewer-symbol {
+  color: #64748b;
+  font-style: normal;
+  font-weight: 500;
+}
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  white-space: nowrap;
+}
+.viewer-code {
+  margin: 0;
+  padding: 0.75rem 0;
+  overflow: auto;
+  background: #0f172a; /* dark code background */
+}
+.viewer-code code {
+  display: block;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+.code-line {
+  display: flex;
+  white-space: pre;
+}
+.line-no {
+  flex: 0 0 3.2rem;
+  text-align: right;
+  padding-right: 1rem;
+  color: #64748b;
+  user-select: none;
+}
+.line-text {
+  color: #e2e8f0;
+  padding-right: 1rem;
 }

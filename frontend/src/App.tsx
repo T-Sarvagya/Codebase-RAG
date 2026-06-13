@@ -4,17 +4,19 @@
  *   1. Show RepoForm.  User submits a GitHub URL -> POST /repos.
  *   2. While the repo's status isn't "ready"/"error", poll GET /repos/:id every
  *      couple of seconds and show progress (cloning -> chunking -> embedding).
- *   3. When ready, show a question box.  Submit -> POST /repos/:id/ask.
- *   4. Render the answer + clickable citations (AnswerPanel).
+ *   3. When ready, show a question box.  Submit -> STREAM the answer live.
+ *   4. Render the streaming answer + clickable citations; clicking a citation
+ *      opens the in-app CodeViewer with the exact cited code.
  *
  * State here is deliberately simple (a handful of useState hooks) so the data
  * flow is easy to follow. A bigger app might use a state library or React Query.
  */
 import { useEffect, useState, FormEvent } from 'react';
 import './App.css';
-import { Repo, AskResult, createRepo, getRepo, askQuestion } from './api';
+import { Repo, Citation, createRepo, getRepo, askStream } from './api';
 import { RepoForm } from './components/RepoForm';
 import { AnswerPanel } from './components/AnswerPanel';
+import { CodeViewer } from './components/CodeViewer';
 
 // Human-readable label for each indexing status.
 const STATUS_LABEL: Record<Repo['status'], string> = {
@@ -34,13 +36,19 @@ function App() {
 
   // Question-answering state.
   const [question, setQuestion] = useState('');
-  const [asking, setAsking] = useState(false);
-  const [result, setResult] = useState<AskResult | null>(null);
+  const [asking, setAsking] = useState(false); // a stream is in progress
+  const [answer, setAnswer] = useState(''); // accumulates as tokens arrive
+  const [citations, setCitations] = useState<Citation[]>([]);
+  const [grounded, setGrounded] = useState<boolean | null>(null);
+  const [hasAsked, setHasAsked] = useState(false); // show the panel once we've asked
+
+  // Which chunk (if any) is open in the code viewer modal.
+  const [viewerChunkId, setViewerChunkId] = useState<string | null>(null);
 
   // ---- Step 1: start indexing a repo -------------------------------------
   async function handleIndex(url: string) {
     setError(null);
-    setResult(null);
+    resetAnswer();
     try {
       const created = await createRepo(url); // returns a "pending" repo
       setRepo(created); // this triggers the polling effect below
@@ -50,8 +58,8 @@ function App() {
   }
 
   // ---- Step 2: poll status until ready/error -----------------------------
-  // This effect re-runs whenever `repo?.status` changes. While the repo is
-  // still being indexed, it schedules a poll 2s later; once ready/error it stops.
+  // This effect re-runs whenever `repo` changes. While the repo is still being
+  // indexed, it schedules a poll 2s later; once ready/error it stops.
   useEffect(() => {
     if (!repo) return;
     if (repo.status === 'ready' || repo.status === 'error') return;
@@ -69,29 +77,49 @@ function App() {
     return () => clearTimeout(timer);
   }, [repo]);
 
-  // ---- Step 3/4: ask a question ------------------------------------------
+  // ---- Step 3/4: ask a question (STREAMING) ------------------------------
   async function handleAsk(e: FormEvent) {
     e.preventDefault();
     if (!repo || question.trim().length < 3) return;
+
     setAsking(true);
     setError(null);
-    setResult(null);
-    try {
-      const res = await askQuestion(repo.id, question.trim());
-      setResult(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to get an answer');
-    } finally {
-      setAsking(false);
-    }
+    setHasAsked(true);
+    setAnswer('');
+    setCitations([]);
+    setGrounded(null);
+
+    // askStream dispatches each SSE frame to one of these callbacks.
+    await askStream(repo.id, question.trim(), {
+      // We don't render the raw "sources" list here, but it arrives first and
+      // could be used to show "searching N snippets". (Citations come at the end.)
+      onToken: (text) => setAnswer((prev) => prev + text), // append live
+      onDone: (d) => {
+        setCitations(d.citations);
+        setGrounded(d.grounded);
+        setAsking(false);
+      },
+      onError: (message) => {
+        setError(message);
+        setAsking(false);
+      },
+    });
+  }
+
+  function resetAnswer() {
+    setAnswer('');
+    setCitations([]);
+    setGrounded(null);
+    setHasAsked(false);
   }
 
   // Lets the user start over with a different repo.
   function reset() {
     setRepo(null);
-    setResult(null);
     setQuestion('');
     setError(null);
+    setViewerChunkId(null);
+    resetAnswer();
   }
 
   const isIndexing =
@@ -151,8 +179,25 @@ function App() {
 
       {error && <p className="warning">{error}</p>}
 
-      {/* The answer + citations. */}
-      {repo && result && <AnswerPanel repo={repo} result={result} />}
+      {/* The streaming answer + citations. */}
+      {hasAsked && (
+        <AnswerPanel
+          answer={answer}
+          citations={citations}
+          grounded={grounded}
+          streaming={asking}
+          onOpenChunk={setViewerChunkId}
+        />
+      )}
+
+      {/* The code viewer modal, when a citation is open. */}
+      {viewerChunkId && repo && (
+        <CodeViewer
+          chunkId={viewerChunkId}
+          repo={repo}
+          onClose={() => setViewerChunkId(null)}
+        />
+      )}
     </div>
   );
 }

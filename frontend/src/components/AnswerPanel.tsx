@@ -1,48 +1,53 @@
 /**
  * AnswerPanel.tsx
  *
- * Renders the result of a question: the generated answer plus the list of
- * citations. Each citation is a clickable chip that opens the exact file +
- * line range on GitHub (a real in-app code viewer arrives in milestone 5).
+ * Renders the answer as it streams in, plus the citations. Each citation is a
+ * button that opens the in-app CodeViewer (via the onOpenChunk callback) so you
+ * can read the exact cited code without leaving the page.
  *
- * If the answer cited nothing (`grounded === false`) we show a warning, because
- * an uncited answer is exactly the "hallucination smell" the grounding step is
- * designed to catch.
+ * While the answer is still streaming we show a blinking cursor; once it's done,
+ * if it cited nothing (`grounded === false`) we show a warning — an uncited
+ * answer is the "hallucination smell" the grounding step is designed to catch.
  */
-import { AskResult, Repo } from '../api';
+import { Citation } from '../api';
 
 interface Props {
-  repo: Repo;
-  result: AskResult;
+  answer: string; // accumulates as tokens stream in
+  citations: Citation[]; // populated on the final "done" frame
+  grounded: boolean | null; // null while streaming, true/false when done
+  streaming: boolean; // true while tokens are still arriving
+  onOpenChunk: (chunkId: string) => void;
 }
 
-export function AnswerPanel({ repo, result }: Props) {
+export function AnswerPanel({ answer, citations, grounded, streaming, onOpenChunk }: Props) {
   return (
     <div className="answer-panel">
-      {/* The model's answer. Citations appear inline as [1], [2] markers. */}
       <h3>Answer</h3>
-      <p className="answer-text">{result.answer}</p>
+      <p className="answer-text">
+        {answer}
+        {streaming && <span className="cursor">▍</span>}
+      </p>
 
-      {!result.grounded && (
+      {/* Only meaningful once streaming finished. */}
+      {!streaming && grounded === false && (
         <p className="warning">
           ⚠️ This answer didn't cite any indexed code — treat it with caution.
         </p>
       )}
 
-      {result.citations.length > 0 && (
+      {citations.length > 0 && (
         <>
           <h4>Sources</h4>
           <ul className="citation-list">
-            {result.citations.map((c) => (
+            {citations.map((c) => (
               <li key={c.chunkId}>
-                <a
+                <button
                   className="citation-chip"
-                  href={buildGithubUrl(repo, c.filePath, c.startLine, c.endLine)}
-                  target="_blank"
-                  rel="noreferrer"
+                  onClick={() => onOpenChunk(c.chunkId)}
+                  title="View the cited code"
                 >
                   [{c.marker}] {c.filePath}:{c.startLine}-{c.endLine}
-                </a>
+                </button>
               </li>
             ))}
           </ul>
@@ -50,19 +55,4 @@ export function AnswerPanel({ repo, result }: Props) {
       )}
     </div>
   );
-}
-
-/**
- * Construct a GitHub "blob" URL that deep-links to the cited lines, e.g.
- * https://github.com/owner/repo/blob/main/src/x.ts#L10-L42
- */
-function buildGithubUrl(
-  repo: Repo,
-  filePath: string,
-  startLine: number,
-  endLine: number,
-): string {
-  const base = repo.url.replace(/\.git$/, '').replace(/\/$/, '');
-  const branch = repo.default_branch ?? 'main';
-  return `${base}/blob/${branch}/${filePath}#L${startLine}-L${endLine}`;
 }

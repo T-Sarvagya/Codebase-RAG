@@ -69,8 +69,9 @@ ask-your-codebase/
 │       │   └── dto/create-repo.dto.ts
 │       │
 │       └── ask/             # ANSWERING feature (retrieve -> generate -> cite)
-│           ├── ask.controller.ts     # POST /repos/:id/ask
-│           ├── ask.service.ts        # the RAG flow
+│           ├── ask.controller.ts     # POST /repos/:id/ask  and  .../ask/stream (SSE)
+│           ├── ask.service.ts        # the RAG flow (one-shot + streaming generator)
+│           ├── chunks.controller.ts  # GET /chunks/:id  (code viewer source)
 │           ├── ask.module.ts
 │           └── dto/ask.dto.ts
 │
@@ -81,7 +82,8 @@ ask-your-codebase/
         ├── App.css / index.css        # styles
         └── components/
             ├── RepoForm.tsx           # the "paste a GitHub URL" input
-            └── AnswerPanel.tsx        # renders the answer + clickable citations
+            ├── AnswerPanel.tsx        # renders the streaming answer + citations
+            └── CodeViewer.tsx         # modal showing the cited code (line numbers)
 ```
 
 ---
@@ -201,24 +203,42 @@ the DB as chunks, so we don't need the files on disk).
 
 The response shape: `{ answer, citations[], grounded, retrievedChunkCount }`.
 
+**Streaming version** — `POST /repos/:id/ask/stream` does the same RAG flow but
+emits the answer live as Server-Sent-Events instead of waiting for the whole
+thing. `AskService.streamAnswer()` is an async generator that yields:
+`{type:'sources'}` (the retrieved chunks), then many `{type:'token'}` (pieces of
+the answer as Gemini writes them via `gemini.generateStream()`), then
+`{type:'done', citations, grounded}`. The controller writes each as an SSE frame
+(`event: …\ndata: …\n\n`). Both paths share the same `prepare()` (retrieve +
+build prompt) and `ground()` (map `[n]` → citations) helpers, so they stay
+consistent. **`chunks.controller.ts`** serves `GET /chunks/:id` so the frontend's
+code viewer can fetch the exact cited code on demand.
+
 ---
 
 ## 7. The frontend (`frontend/src/`)
 
 - **`api.ts`** — the only file that knows the backend URL. It exposes
-  `createRepo()`, `getRepo()`, `askQuestion()` and the TypeScript types that mirror
-  the backend's JSON. Components import from here, never `fetch` directly.
+  `createRepo()`, `getRepo()`, `askQuestion()`, `getChunk()`, and `askStream()`
+  plus the TypeScript types that mirror the backend's JSON. `askStream()` reads
+  the SSE response with a `fetch()` + ReadableStream reader, splits it into frames
+  on the blank-line separator, and calls `onToken` / `onDone` / `onError`
+  callbacks. Components import from here, never `fetch` directly.
 - **`App.tsx`** — the orchestrator. It holds the small amount of state (current
   repo, question, result, error) and drives the flow:
   1. show `RepoForm` → on submit, `createRepo()` and store the repo;
   2. a `useEffect` **polls** `getRepo()` every 2s until status is `ready`/`error`;
-  3. once `ready`, show the question box → on submit, `askQuestion()`;
-  4. render `AnswerPanel` with the result.
+  3. once `ready`, show the question box → on submit, call `askStream()`,
+     appending each token to the `answer` state so it renders live;
+  4. render `AnswerPanel`; when a citation is clicked, store its chunk id and
+     render the `CodeViewer` modal.
 - **`components/RepoForm.tsx`** — the controlled input for the GitHub URL.
-- **`components/AnswerPanel.tsx`** — shows the answer, a warning if it wasn't
-  grounded, and each citation as a chip that deep-links to the exact lines on
-  GitHub (`/blob/<branch>/<path>#L<start>-L<end>`). A real in-app code viewer
-  replaces the GitHub link in milestone 5.
+- **`components/AnswerPanel.tsx`** — shows the answer as it streams in (with a
+  blinking cursor), a warning if it wasn't grounded, and each citation as a
+  button that opens the in-app code viewer.
+- **`components/CodeViewer.tsx`** — a modal that fetches the cited chunk via
+  `getChunk()` and renders it with real line numbers, plus a "view on GitHub"
+  link for the full file in context.
 
 ---
 

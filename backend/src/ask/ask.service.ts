@@ -13,6 +13,13 @@
  *   4. GROUND:   parse the [n] markers out of the answer and map them back to
  *      real file:line locations — that's what makes citations clickable and what
  *      lets us flag an answer that cited nothing (a hallucination smell).
+ *
+ * There are TWO ways to run this:
+ *   - ask():          one-shot, returns the whole answer at once (simple).
+ *   - streamAnswer(): yields events (sources, then tokens as the model writes
+ *                     them, then a final "done" with citations) so the UI can
+ *                     render the answer live. Both share the same retrieve +
+ *                     ground helpers below, so behavior stays consistent.
  */
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { DbService } from '../db/db.service';
@@ -31,9 +38,9 @@ interface RetrievedChunk {
   distance: number; // 0 = identical direction; smaller = more relevant
 }
 
-/** A citation we hand back to the UI so it can render a clickable chip. */
+/** A citation/source we hand to the UI so it can render a clickable chip. */
 export interface Citation {
-  marker: number; // the [n] number used in the answer
+  marker: number; // the [n] number (its position in the retrieved list)
   chunkId: string;
   filePath: string;
   startLine: number;
@@ -47,6 +54,21 @@ export interface AskResult {
   retrievedChunkCount: number;
 }
 
+/** Everything the generation step needs, produced by retrieval + prompt building. */
+interface Prepared {
+  chunks: RetrievedChunk[];
+  sources: Citation[]; // all retrieved chunks, numbered (before we know what's cited)
+  systemInstruction: string;
+  userPrompt: string;
+}
+
+/** One event in the streaming response. */
+export type StreamEvent =
+  | { type: 'sources'; data: Citation[] }
+  | { type: 'token'; data: string }
+  | { type: 'done'; data: { grounded: boolean; citations: Citation[] } }
+  | { type: 'error'; data: { message: string } };
+
 @Injectable()
 export class AskService {
   // How many chunks to retrieve and feed to the model as context.
@@ -58,15 +80,83 @@ export class AskService {
     private readonly gemini: GeminiService,
   ) {}
 
+  // ===========================================================================
+  // PUBLIC: one-shot answer
+  // ===========================================================================
   async ask(repoId: string, question: string): Promise<AskResult> {
-    // --- 1. RETRIEVE -------------------------------------------------------
+    const prep = await this.prepare(repoId, question);
+
+    if (prep.chunks.length === 0) {
+      return {
+        answer:
+          "I couldn't find any indexed code for this repository. Has indexing finished?",
+        citations: [],
+        grounded: false,
+        retrievedChunkCount: 0,
+      };
+    }
+
+    let answer: string;
+    try {
+      answer = await this.gemini.generate(prep.systemInstruction, prep.userPrompt);
+    } catch (err) {
+      throw this.toHttpError(err);
+    }
+
+    const { citations, grounded } = this.ground(answer, prep.chunks);
+    this.logQuery(repoId, question, answer, citations);
+
+    return { answer, citations, grounded, retrievedChunkCount: prep.chunks.length };
+  }
+
+  // ===========================================================================
+  // PUBLIC: streaming answer (async generator of events)
+  // ===========================================================================
+  async *streamAnswer(repoId: string, question: string): AsyncGenerator<StreamEvent> {
+    const prep = await this.prepare(repoId, question);
+
+    // Tell the UI which chunks we retrieved up front, so it can show "searching
+    // N snippets" and resolve [n] markers as they stream in.
+    yield { type: 'sources', data: prep.sources };
+
+    if (prep.chunks.length === 0) {
+      yield { type: 'done', data: { grounded: false, citations: [] } };
+      return;
+    }
+
+    // Stream tokens from Gemini, accumulating the full text so we can ground it.
+    let full = '';
+    try {
+      for await (const token of this.gemini.generateStream(
+        prep.systemInstruction,
+        prep.userPrompt,
+      )) {
+        full += token;
+        yield { type: 'token', data: token };
+      }
+    } catch (err) {
+      const http = this.toHttpError(err);
+      yield { type: 'error', data: { message: http.message } };
+      return;
+    }
+
+    const { citations, grounded } = this.ground(full, prep.chunks);
+    this.logQuery(repoId, question, full, citations);
+    yield { type: 'done', data: { grounded, citations } };
+  }
+
+  // ===========================================================================
+  // SHARED HELPERS
+  // ===========================================================================
+
+  /** RETRIEVE + AUGMENT: vector search, then build the numbered prompt. */
+  private async prepare(repoId: string, question: string): Promise<Prepared> {
     // Embed the question with input_type "query" (matches how docs were stored).
     const queryVector = await this.embeddings.embedQuery(question);
     const literal = this.db.toVectorLiteral(queryVector);
 
     // `embedding <=> $1` is pgvector's cosine-distance operator. Ordering by it
-    // ascending and LIMITing gives the nearest (most relevant) chunks. The
-    // ivfflat index makes this fast once the table has data.
+    // ascending and LIMITing gives the nearest (most relevant) chunks.
     const chunks = await this.db.query<RetrievedChunk>(
       `SELECT id, file_path, start_line, end_line, language, symbol_name, content,
               embedding <=> $1 AS distance
@@ -77,19 +167,16 @@ export class AskService {
       [literal, repoId, this.TOP_K],
     );
 
-    if (chunks.length === 0) {
-      return {
-        answer:
-          "I couldn't find any indexed code for this repository. Has indexing finished?",
-        citations: [],
-        grounded: false,
-        retrievedChunkCount: 0,
-      };
-    }
+    // The numbered list of all retrieved chunks (the candidate sources). The
+    // [n] number is its 1-based position, which maps straight back to chunks[n-1].
+    const sources: Citation[] = chunks.map((c, i) => ({
+      marker: i + 1,
+      chunkId: c.id,
+      filePath: c.file_path,
+      startLine: c.start_line,
+      endLine: c.end_line,
+    }));
 
-    // --- 2. AUGMENT --------------------------------------------------------
-    // Build the numbered context block. The [n] number is what the model will
-    // cite, and its position (n-1) maps straight back to chunks[n-1].
     const context = chunks
       .map((c, i) => {
         const header = `[${i + 1}] ${c.file_path}:${c.start_line}-${c.end_line}`;
@@ -115,28 +202,14 @@ export class AskService {
       `QUESTION: ${question}\n\n` +
       `Answer the question using the context above, with inline [n] citations.`;
 
-    // --- 3. GENERATE -------------------------------------------------------
-    // Translate Gemini's rate-limit error into a clean 429 with a helpful
-    // message, instead of letting it bubble up as a generic 500. The free tier
-    // has per-minute caps, so a quick second question can hit this briefly.
-    let answer: string;
-    try {
-      answer = await this.gemini.generate(systemInstruction, userPrompt);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
-        throw new HttpException(
-          'Gemini free-tier rate limit hit — wait ~30s and ask again. ' +
-            '(Tip: gemini-2.5-flash-lite has higher free limits.)',
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-      throw err; // anything else is a genuine error
-    }
+    return { chunks, sources, systemInstruction, userPrompt };
+  }
 
-    // --- 4. GROUND ---------------------------------------------------------
-    // Pull every [n] marker the model actually used, dedupe, and map back to
-    // the real chunk it points at. Markers outside 1..TOP_K are ignored.
+  /** GROUND: map the [n] markers the model used back to real chunk citations. */
+  private ground(
+    answer: string,
+    chunks: RetrievedChunk[],
+  ): { citations: Citation[]; grounded: boolean } {
     const usedMarkers = new Set<number>();
     for (const match of answer.matchAll(/\[(\d+)\]/g)) {
       const n = Number(match[1]);
@@ -157,9 +230,16 @@ export class AskService {
       });
 
     // An answer that cites nothing is suspicious — flag it so the UI can warn.
-    const grounded = citations.length > 0;
+    return { citations, grounded: citations.length > 0 };
+  }
 
-    // Best-effort logging of the Q/A for history; never block the response on it.
+  /** Best-effort logging of the Q/A for history; never blocks the response. */
+  private logQuery(
+    repoId: string,
+    question: string,
+    answer: string,
+    citations: Citation[],
+  ): void {
     void this.db
       .query(
         `INSERT INTO query_logs (repo_id, question, answer, cited_chunk_ids)
@@ -167,12 +247,21 @@ export class AskService {
         [repoId, question, answer, citations.map((c) => c.chunkId)],
       )
       .catch(() => undefined);
+  }
 
-    return {
-      answer,
-      citations,
-      grounded,
-      retrievedChunkCount: chunks.length,
-    };
+  /** Convert a Gemini error into a clean HttpException (429 for rate limits). */
+  private toHttpError(err: unknown): HttpException {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+      return new HttpException(
+        'Gemini free-tier rate limit hit — wait ~30s and ask again. ' +
+          '(Tip: gemini-2.5-flash-lite has higher free limits.)',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    return new HttpException(
+      'Failed to generate an answer.',
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
 }

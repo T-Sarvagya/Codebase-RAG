@@ -80,7 +80,9 @@ Open http://localhost:5173, paste a GitHub URL, wait for indexing to reach
 | ------ | ------------------- | -------------------------------------------------- |
 | `POST` | `/repos`            | Start indexing a repo. Body `{ url }`. Returns the new repo (status `pending`). |
 | `GET`  | `/repos/:id`        | Poll indexing status (`pending`→`cloning`→`chunking`→`embedding`→`ready`/`error`). |
-| `POST` | `/repos/:id/ask`    | Ask a question. Body `{ question }`. Returns `{ answer, citations, grounded }`. |
+| `POST` | `/repos/:id/ask`    | Ask a question (one-shot). Body `{ question }`. Returns `{ answer, citations, grounded }`. |
+| `POST` | `/repos/:id/ask/stream` | Same, but streams the answer as SSE frames (`sources` → `token`s → `done`). |
+| `GET`  | `/chunks/:id`       | Fetch one stored chunk's content (used by the in-app code viewer). |
 
 ---
 
@@ -94,7 +96,8 @@ Built in milestones (see `.claude/plans` for the full plan):
 - ✅ **M4 — AST-aware chunking:** tree-sitter splits on function/class/method
   boundaries (TS/TSX/JS/Python), names each chunk (`Class.method`, `router.get`),
   and gracefully falls back to line-windows for other languages.
-- ⏳ **M5 — Token streaming** (SSE) + in-app code viewer for citations.
+- ✅ **M5 — Token streaming + code viewer:** answers stream in live over SSE,
+  and clicking a citation opens the cited code (with line numbers) in-app.
 - ⏳ **M6 — Polish, deploy notes, screenshots.**
 
 > The chunker (`chunker.service.ts`) parses each file with tree-sitter and chunks
