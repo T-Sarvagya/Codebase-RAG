@@ -177,7 +177,7 @@ origin.
 
 ## Project status
 
-Built in milestones (full plan in `.claude/plans`):
+Built in milestones:
 
 - ✅ **M1 — Scaffold + infra:** monorepo, Docker pgvector, NestJS + Vite apps.
 - ✅ **M2 — Ingest:** clone → walk → chunk → embed → store in pgvector.
