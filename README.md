@@ -17,7 +17,7 @@ It's a RAG (Retrieval-Augmented Generation) app done carefully:
 ## Architecture
 
 ```
-GitHub repo URL ──▶ clone (simple-git) ──▶ chunk files ──▶ embed (Voyage)
+GitHub repo URL ──▶ clone (simple-git) ──▶ chunk files ──▶ embed (Gemini)
                                                               │
                                                               ▼
 React (Vite) ◀──── JSON answer + citations ◀──── NestJS ◀── pgvector (top-k search)
@@ -26,9 +26,12 @@ React (Vite) ◀──── JSON answer + citations ◀──── NestJS ◀�
 
 - **Frontend:** React + TypeScript (Vite) — `frontend/`
 - **Backend:** NestJS + TypeScript — `backend/`
-- **Embeddings:** Voyage AI `voyage-code-3` (1024-dim, tuned for code)
-- **Generation:** Google Gemini via `@google/genai`
+- **Embeddings:** Google Gemini `gemini-embedding-001` (768-dim)
+- **Generation:** Google Gemini `gemini-2.5-flash` via `@google/genai`
 - **Vector store:** Postgres + `pgvector` (runs in Docker)
+
+> One Gemini key powers **both** embeddings and generation — no second provider,
+> and it runs entirely on the free tier (no payment required).
 
 ---
 
@@ -36,20 +39,20 @@ React (Vite) ◀──── JSON answer + citations ◀──── NestJS ◀�
 
 - **Node 18+** and **npm**
 - **Docker** (for the Postgres + pgvector container)
-- Two free API keys:
-  - **Gemini** — Google AI Studio: https://aistudio.google.com/apikey
-    (this is the developer API key starting with `AIza…`, **not** the consumer
-    "Gemini Advanced/Pro" app subscription)
-  - **Voyage AI** — https://www.voyageai.com/ (dashboard → API Keys)
+- **One free API key** — **Gemini**, from Google AI Studio:
+  https://aistudio.google.com/apikey (the developer API key, **not** the consumer
+  "Gemini Advanced/Pro" app subscription). It powers both embeddings and answers.
+  - Note: if a model reports `free tier limit 0` for your key, switch
+    `GEMINI_MODEL` (e.g. to `gemini-2.5-flash-lite`) — see `.env.example`.
 
 ---
 
 ## Setup & run
 
 ```bash
-# 1. From the repo root: copy the env template and fill in your two keys
+# 1. From the repo root: copy the env template and fill in your Gemini key
 cp .env.example backend/.env
-#    then edit backend/.env -> set GEMINI_API_KEY and VOYAGE_API_KEY
+#    then edit backend/.env -> set GEMINI_API_KEY
 
 # 2. Start the vector database (Postgres + pgvector) in Docker
 docker compose up -d

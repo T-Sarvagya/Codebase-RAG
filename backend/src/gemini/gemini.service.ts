@@ -21,7 +21,7 @@ export class GeminiService {
 
   constructor(private readonly config: ConfigService) {
     const apiKey = this.config.getOrThrow<string>('GEMINI_API_KEY');
-    this.model = this.config.get<string>('GEMINI_MODEL', 'gemini-2.0-flash');
+    this.model = this.config.get<string>('GEMINI_MODEL', 'gemini-2.5-flash');
     // The SDK client is cheap to construct and safe to reuse for all requests.
     this.client = new GoogleGenAI({ apiKey });
   }

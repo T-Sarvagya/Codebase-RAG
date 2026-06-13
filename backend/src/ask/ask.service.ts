@@ -14,7 +14,7 @@
  *      real file:line locations — that's what makes citations clickable and what
  *      lets us flag an answer that cited nothing (a hallucination smell).
  */
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { GeminiService } from '../gemini/gemini.service';
@@ -116,7 +116,23 @@ export class AskService {
       `Answer the question using the context above, with inline [n] citations.`;
 
     // --- 3. GENERATE -------------------------------------------------------
-    const answer = await this.gemini.generate(systemInstruction, userPrompt);
+    // Translate Gemini's rate-limit error into a clean 429 with a helpful
+    // message, instead of letting it bubble up as a generic 500. The free tier
+    // has per-minute caps, so a quick second question can hit this briefly.
+    let answer: string;
+    try {
+      answer = await this.gemini.generate(systemInstruction, userPrompt);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/429|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+        throw new HttpException(
+          'Gemini free-tier rate limit hit — wait ~30s and ask again. ' +
+            '(Tip: gemini-2.5-flash-lite has higher free limits.)',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      throw err; // anything else is a genuine error
+    }
 
     // --- 4. GROUND ---------------------------------------------------------
     // Pull every [n] marker the model actually used, dedupe, and map back to

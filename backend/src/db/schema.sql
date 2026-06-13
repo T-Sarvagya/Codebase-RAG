@@ -40,8 +40,9 @@ CREATE TABLE IF NOT EXISTS code_chunks (
   language     TEXT,                    -- inferred from file extension
   symbol_name  TEXT,                    -- function/class name (filled in once AST chunking lands)
   content      TEXT NOT NULL,           -- the actual code text of this chunk
-  -- The embedding. vector(1024) MUST match VOYAGE_DIM in .env (voyage-code-3 = 1024).
-  embedding    vector(1024) NOT NULL,
+  -- The embedding. vector(768) MUST match EMBEDDING_DIM in .env
+  -- (Gemini text-embedding-004 = 768). Change both together if you swap models.
+  embedding    vector(768) NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

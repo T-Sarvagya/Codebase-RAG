@@ -50,7 +50,7 @@ ask-your-codebase/
 │       │   ├── db.service.ts     # one shared connection pool + query helpers
 │       │   └── db.module.ts      # makes DbService available app-wide (@Global)
 │       │
-│       ├── embeddings/      # text -> vector (Voyage AI)
+│       ├── embeddings/      # text -> vector (Gemini)
 │       │   ├── embeddings.service.ts
 │       │   └── embeddings.module.ts
 │       │
@@ -111,7 +111,7 @@ These three services are used by both features.
 ### `db/` — the database
 - **`schema.sql`** defines three tables: `repos` (one row per indexed repo, with a
   `status` for progress), `code_chunks` (the important one — each chunk's text +
-  its `embedding vector(1024)`), and `query_logs` (history). It also turns on the
+  its `embedding vector(768)`), and `query_logs` (history). It also turns on the
   `pgvector` extension.
 - **`db.service.ts`** opens one connection **pool** at startup, runs `schema.sql`
   (a tiny "migration" — safe to run every boot because everything is
@@ -120,11 +120,14 @@ These three services are used by both features.
 - **`db.module.ts`** is `@Global`, so `DbService` is injectable everywhere without
   re-importing it.
 
-### `embeddings/` — text → vector (Voyage)
-- **`embeddings.service.ts`** calls Voyage's REST API to turn text into 1024-number
-  vectors. `embedDocuments()` is used at index time (batched); `embedQuery()` at
-  search time. It tells Voyage whether the text is a "document" or a "query",
-  which improves match quality.
+### `embeddings/` — text → vector (Gemini)
+- **`embeddings.service.ts`** calls Gemini's `gemini-embedding-001` model to turn
+  text into 768-number vectors. `embedDocuments()` is used at index time (batched,
+  with retry/backoff on rate limits); `embedQuery()` at search time. It tells
+  Gemini whether the text is a `RETRIEVAL_DOCUMENT` or a `RETRIEVAL_QUERY`, which
+  improves match quality. (We chose Gemini over Voyage because Voyage's free tier
+  throttles to 3 requests/min — Gemini's free tier is far more usable, and reusing
+  the same key keeps the app on one provider.)
 
 ### `gemini/` — generation (Gemini)
 - **`gemini.service.ts`** wraps Google's `@google/genai` SDK. `generate()` returns a
@@ -215,7 +218,7 @@ The response shape: `{ answer, citations[], grounded, retrievedChunkCount }`.
 
 1. `AnswerPanel`/`App.tsx` → `api.askQuestion(repoId, "How does login work?")`
 2. → `POST /repos/:id/ask` → `AskController.askQuestion()` → `AskService.ask()`
-3. `EmbeddingsService.embedQuery()` → Voyage → a 1024-number vector for the question
+3. `EmbeddingsService.embedQuery()` → Gemini → a 768-number vector for the question
 4. `DbService.query()` runs the `<=>` similarity search → the 8 closest code chunks
    (e.g. `auth.service.ts`, `login.controller.ts` …)
 5. `AskService` builds the numbered CONTEXT and calls `GeminiService.generate()`
